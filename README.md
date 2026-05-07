@@ -1,118 +1,66 @@
 # RaspberryPiStreaming
 
-Headless camera stream from a Raspberry Pi 5 + Camera Module, viewable in any
-browser on the same WiFi network.
+Live camera stream from a Raspberry Pi 5 + Camera Module, viewable in any
+browser on the same WiFi.
 
-The Pi runs `stream_server.py` as a systemd service that auto-starts on boot
-and auto-restarts on crash. Camera settings (gain, exposure, colour gains,
-sensor mode) mirror `image.py`.
+**Stream URL:** <http://10.194.110.225:8000/index.html>
 
 ## Files
 
-| File | Purpose |
-|---|---|
-| `image.py` | Original local Qt preview (used only with a monitor attached). |
-| `stream_server.py` | Headless HTTP server: JPG-polling page + MJPEG endpoint. |
-| `camera-stream.service` | systemd unit template (paths filled in by `install.sh`). |
-| `install.sh` | Installs apt deps and registers the systemd service. |
-| `uninstall.sh` | Disables and removes the camera-stream service. |
+- `image.py` — original local Qt preview (monitor attached).
+- `stream_server.py` — headless HTTP server (JPG-polling page + MJPEG endpoint). Same camera settings as `image.py`.
+- `camera-stream.service` — systemd unit template.
+- `install.sh` — installs deps and registers the auto-start service.
+- `uninstall.sh` — removes the service.
 
-## How the streaming works
+## Install on the Pi 5
 
-`stream_server.py` exposes two endpoints on port 8000:
+Raspberry Pi OS Bookworm. Connect the camera ribbon, then:
 
-| URL | What it does | Best for |
-|---|---|---|
-| `/` (`/index.html`) | HTML page that fetches `/snapshot.jpg` in a JS loop | Universal browser support (Safari included) |
-| `/snapshot.jpg` | One JPEG of the latest camera frame | Custom clients, the polling page |
-| `/stream.mjpg` | `multipart/x-mixed-replace` MJPEG stream | Lower overhead in Chrome/Firefox; VLC; ffplay |
+```bash
+cd ~/RaspberryPiStreaming
+bash install.sh
+```
 
-The default page uses JPG polling because Safari and many embedded WebViews
-don't render `multipart/x-mixed-replace` reliably. The MJPEG endpoint stays
-available for direct access if you want it.
+Installs `python3-picamera2`, enables `camera-stream.service`, prints the LAN
+URL. The service starts on boot and restarts on crash.
 
-## One-time setup on the Pi 5
-
-Assumes Raspberry Pi OS Bookworm (Pi 5 default).
-
-1. **Connect the camera ribbon** (blue side toward the Ethernet port). Verify:
-   ```bash
-   rpicam-hello --list-cameras
-   ```
-
-2. **Run the installer** on the Pi:
-   ```bash
-   cd ~/RaspberryPiStreaming
-   bash install.sh
-   ```
-   It installs `python3-picamera2` and registers the systemd service. The
-   script prints the LAN URL when finished.
-
-Power-cycle the Pi to confirm the stream auto-starts.
-
-## Viewing the stream
+## View
 
 Open in any browser on the same WiFi:
 
-- `http://<pi-hostname>.local:8000/`
-- `http://<pi-lan-ip>:8000/`
+<http://10.194.110.225:8000/index.html>
 
-The page fills the window with the live image. The frame rate self-paces to
-the camera + network — typically ~15–20 fps with the default settings.
+## Operate (on the Pi)
 
-## Operating it
+```bash
+sudo systemctl status camera-stream      # state
+sudo journalctl -u camera-stream -f      # logs
+sudo systemctl restart camera-stream     # apply changes
+bash uninstall.sh                        # disable auto-start
+```
 
-| Action | Command (on the Pi) |
-|---|---|
-| Live stream logs | `sudo journalctl -u camera-stream -f` |
-| Service state | `sudo systemctl status camera-stream` |
-| Restart streaming | `sudo systemctl restart camera-stream` |
-| Stop autostart | `bash uninstall.sh` |
+## Tweak
 
-After editing `stream_server.py`, run `sudo systemctl restart camera-stream`
-to apply changes.
+Knobs at the top of `stream_server.py`:
 
-## Tweaking
+- `PORT = 8000`
+- `main={"size": (1600, 1200)}` — lower for higher fps.
+- `ExposureTime = 50000` (50 ms, 20 fps cap) — lower for more fps if bright.
+- `picam2.sensor_modes[3]` — try 0–2 for faster readout.
+- `JpegEncoder(q=70)` — smaller frames at minor quality cost.
 
-All knobs live near the top of `stream_server.py`:
+Restart the service after editing.
 
-- **Port** — `PORT = 8000`.
-- **Resolution** — `main={"size": (1600, 1200)}`. Lower it (e.g. `1280, 720`)
-  for higher fps over weaker WiFi.
-- **Camera settings** — `AnalogueGain`, `ExposureTime`, `ColourGains` mirror
-  `image.py`. `ExposureTime = 50000` (50 ms) caps fps at 20; lowering to
-  `16000` (16 ms) raises the ceiling to ~60 fps if the scene is bright enough.
-- **Sensor mode** — `picam2.sensor_modes[3]`. Try modes 0–2 for faster
-  readout at smaller native resolutions.
-- **JPEG quality** — pass `JpegEncoder(q=70)` for smaller frames at minor
-  visual cost.
+## Endpoints
+
+- `/` — JPG-polling page (works in every browser).
+- `/snapshot.jpg` — single latest frame.
+- `/stream.mjpg` — MJPEG stream (Chrome/Firefox/VLC).
 
 ## Troubleshooting
 
-- **`stream_server.py` won't start** — check `sudo journalctl -u camera-stream -e`.
-  Most common cause is the camera ribbon not seated; confirm with
-  `rpicam-hello --list-cameras`.
-- **Page loads but image is broken in Safari** — the default page uses JPG
-  polling specifically to avoid this. If you still see a broken image, you
-  may have an old cached page; hard-refresh with **Cmd+Shift+R**.
-- **`curl http://<pi>:8000/index.html` works but the browser shows nothing** —
-  cached old version, or you're hitting the MJPEG endpoint directly. Hard-refresh.
-- **Connection times out from the laptop, but works from the Pi itself** —
-  WiFi is isolating clients (common on institutional networks: IllinoisNet,
-  eduroam, guest WiFi). Symptom: `ping <pi-ip>` from your laptop returns
-  "No route to host". Use a network without client isolation (home WiFi,
-  phone hotspot, ethernet).
-- **Low fps / stutter** — drop the resolution and/or `ExposureTime` (see
-  Tweaking). WiFi RSSI on the Pi side matters too: `iwconfig wlan0`.
-- **`libcamera-vid: command not found`** — on Bookworm it's renamed
-  `rpicam-vid` (in package `rpicam-apps`). Not needed for streaming;
-  `stream_server.py` uses Picamera2 directly.
-
-## When to consider something else
-
-For genuinely smooth, low-latency, low-bandwidth video (30–60 fps at 1080p
-over WiFi), MJPEG/JPG-polling is not the right tool — it sends a full
-JPEG every frame. The modern answer is H.264 streamed via
-[MediaMTX](https://github.com/bluenviron/mediamtx) and viewed as WebRTC in
-the browser. Roughly 5–10× more efficient than MJPEG at the same visual
-quality. Out of scope for this repo, but easy to add on top later.
+- **Service won't start** → `sudo journalctl -u camera-stream -e`. Usually the camera ribbon. Verify with `rpicam-hello --list-cameras`.
+- **Browser blank, `curl` from Mac works** → hard-refresh (Cmd+Shift+R).
+- **`ping` from Mac says "No route to host"** → WiFi is isolating clients (common on IllinoisNet/eduroam). Use home WiFi, hotspot, or ethernet.
+- **Low fps** → drop resolution, lower `ExposureTime`, or use `JpegEncoder(q=70)`.
