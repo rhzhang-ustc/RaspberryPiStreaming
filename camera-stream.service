@@ -1,0 +1,17 @@
+[Unit]
+Description=Raspberry Pi camera MJPEG stream
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__PROJECT_DIR__
+ExecStart=/usr/bin/python3 __PROJECT_DIR__/stream_server.py
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
