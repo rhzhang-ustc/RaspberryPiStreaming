@@ -29,12 +29,22 @@ PAGE = """\
 <head>
 <title>Raspberry Pi Camera Stream</title>
 <style>
-  html, body { margin: 0; padding: 0; background: #000; height: 100%; }
+  html, body { margin: 0; padding: 0; background: #000; height: 100%; overflow: hidden; }
   img { display: block; width: 100vw; height: 100vh; object-fit: contain; }
 </style>
 </head>
 <body>
-<img src="stream.mjpg" />
+<img id="frame" />
+<script>
+  // Fetch one JPEG, wait until it has decoded, fetch the next.
+  // Self-paces to whatever rate the camera + network can sustain,
+  // and works in every browser (no multipart/x-mixed-replace quirks).
+  const img = document.getElementById('frame');
+  const next = () => { img.src = '/snapshot.jpg?t=' + Date.now(); };
+  img.onload = next;
+  img.onerror = () => setTimeout(next, 500);
+  next();
+</script>
 </body>
 </html>
 """
@@ -64,6 +74,26 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
+        elif self.path.startswith("/snapshot.jpg"):
+            try:
+                with output.condition:
+                    if not output.condition.wait(timeout=2.0):
+                        self.send_error(503, "Camera frame timeout")
+                        return
+                    frame = output.frame
+                if frame is None:
+                    self.send_error(503, "No frame available")
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Expires", "0")
+                self.send_header("Content-Length", str(len(frame)))
+                self.end_headers()
+                self.wfile.write(frame)
+            except (BrokenPipeError, ConnectionResetError):
+                logging.info("Client %s disconnected", self.client_address)
         elif self.path == "/stream.mjpg":
             self.send_response(200)
             self.send_header("Age", "0")
